@@ -10,19 +10,24 @@
 #   "pip install chess"
 
 import chess
+import chess.syzygy
 import hashlib
+import os
 import random
 import struct
 import sys
 
 # Options
+opt_debug         = False
 opt_deterministic = False
 opt_filter        = None
 opt_promotion     = None
 opt_seed          = None
+opt_syzygypath    = None
 
-# Global board state
-board = chess.Board()
+# Globals from "chess"
+board             = chess.Board()
+tablespace        = None
 
 # Keep reading lines/commands from standard input until told to quit.
 for line in sys.stdin:
@@ -77,6 +82,56 @@ for line in sys.stdin:
                 if lm:
                     proposed_move = chr(201 - ord(lm[0])) + chr(105 - ord(lm[1])) + \
                                     chr(201 - ord(lm[2])) + chr(105 - ord(lm[3])) + lm[4:]
+            elif opt_filter == "syzygy":
+                # If all moves are in the tablespace then find the best move by
+                # first optimizing for WDL, and then DTZ.
+                # TODO: This is quite suboptimal when the winning side has more
+                # pieces than required to win since it may sacrifice one of those
+                # pieces, producing a low DTZ, but a much longer path to a win.
+                # It should still win, however.
+                if tablespace is not None:
+                    filtered_moves = []
+                    best_wdl    =  1000000
+                    best_score  = -1000000
+                    wdl = tablespace.get_wdl(board)
+                    if opt_debug:
+                        print("info string syzygy: top level wdl=" + str(wdl))
+                    if wdl is not None:
+                        candidates = []
+                        for move in moves:
+                            board.push_uci(move)
+                            wdl = tablespace.get_wdl(board)
+                            if opt_debug:
+                                print("info string syzygy: move=" + move
+                                    + " wdl=" + str(wdl))
+                            if (wdl is not None) and (wdl <= best_wdl):
+                                # best_dtz is per the best_wdl being
+                                # considered, so reset it if best_wdl changes.
+                                if best_wdl != wdl:
+                                    best_dtz = -1000000
+                                best_wdl = wdl
+                                dtz = tablespace.get_dtz(board)
+                                if opt_debug:
+                                    print("info string syzygy: move=" + move
+                                        + " wdl=" + str(wdl) + " dtz=" + str(dtz)
+                                        + " best_wdl=" + str(best_wdl))
+                                if (dtz is not None) and (dtz >= best_dtz):
+                                    best_dtz = dtz
+                                    score = dtz - 1000 * wdl
+                                    if score > best_score:
+                                        best_score = score
+                                    candidates.append((score, move))
+                                    if opt_debug:
+                                        print("info string syzygy: move=" + move
+                                            + " wdl=" + str(wdl) + " dtz=" + str(dtz)
+                                            + " best_wdl=" + str(best_wdl) + " best_dtz="
+                                            + str(best_dtz) + " best_score=" + str(best_score)
+                                            + " appended " + str((score, move)))
+                            board.pop()
+                        for candidate in candidates:
+                            score, move = candidate
+                            if score >= best_score:
+                                filtered_moves.append(move)
             else:
                 # Assume the filter is a piece. Only moves that move the
                 # specified piece will remain.
@@ -85,6 +140,7 @@ for line in sys.stdin:
                     if board.piece_at(ord(move[0]) - 97 + \
                                  8 * (ord(move[1]) - 49)).symbol() == piece]
 
+            orig_moves_len = len(moves)
             if filtered_move:
                 # Just one move that is certainly valid.
                 moves = [filtered_move]
@@ -94,6 +150,8 @@ for line in sys.stdin:
             elif proposed_move and (proposed_move in moves):
                 # A proposed move that was found to be be valid.
                 moves = [proposed_move]
+            if opt_debug and len(moves) < orig_moves_len:
+                print("info string filtered moves=" + str(moves))
 
         if len(moves) == 1:
             # If there is only one move then it's easy to pick.
@@ -153,12 +211,19 @@ for line in sys.stdin:
         sys.exit(0)
     elif command == "setoption":
         if len(args) < 4:
-            print("setoption has syntax \"setoption name <name> value <value\"")
+            print("setoption has syntax \"setoption name <name> value <value>\"")
             continue
         opt_name = args[1].lower()
-        opt_value = args[3].lower()
+        # For paths only retain the exact case of the value.
+        if "path" in opt_name:
+            opt_value = args[3]
+        else:
+            opt_value = args[3].lower()
         opt_value = None if (opt_value == "none") or (len(opt_value) == 0) else opt_value
-        if opt_name == "deterministic":
+        if opt_name == "debug":
+            # Start with t or T for True, False otherwise.
+            opt_debug = (len(opt_value) >= 1) and (opt_value[0] == "t")
+        elif opt_name == "deterministic":
             # Start with t or T for True, False otherwise.
             opt_deterministic = (len(opt_value) >= 1) and (opt_value[0] == "t")
         elif opt_name == "filter":
@@ -171,6 +236,14 @@ for line in sys.stdin:
                                     ("n" if opt_value == "knight" else opt_value[0])
         elif opt_name == "seed":
             opt_seed = None if opt_value == None else opt_value
+        elif opt_name == "syzygypath":
+            if os.path.isdir(opt_value):
+                if os.path.isfile(opt_value + "/KRvK.rtbw"):
+                    tablespace = chess.syzygy.open_tablebase(opt_value)
+                else:
+                    print("SyzygyPath path \"" + opt_value + "\" does not contain KRvK.rtbw. Ignoring.")
+            else:
+                print("SyzygyPath path \"" + opt_value + "\" is not a directory. Ignoring.")
         else:
             print("Unknown option: " + line)
     elif command == "stop":
@@ -180,11 +253,13 @@ for line in sys.stdin:
         print("id name random-uci 0.9.0")
         print("id author Steven Elliott")
         print()
+        print("option name Debug type check default false")
         print("option name Deterministic type check default false")
         # Make sure to add any new filter types here as well.
-        print("option name Filter type combo default none var none var first var last var mirror var rotate")
+        print("option name Filter type combo default none var none var first var last var mirror var rotate var syzygy")
         print("option name Promotion type combo default random var random var knight var bishop var rook var queen")
         print("option name Seed type string default none")
+        print("option name SyzygyPath type string default none")
         print("uciok")
     elif command == "ucinewgame":
         # Reset to the initial board.

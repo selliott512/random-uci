@@ -26,6 +26,8 @@ A subset of the moves may be chosen. If the filter fails to find a valid move th
   * Mirror the opponent's move across the boundary between the fourth and fifth row. Move "e2e4" becomes "e7e5", for example.
 * **rotate**
   * Rotate the opponent's move 180° around the vertical axis. Move "e2e4" becomes "d7d5", for example.
+* **syzygy**
+  * Use the specified syzygy tablespace to pick the best move when in the tablespace.
 
 ### Promotion
 
@@ -46,7 +48,11 @@ The action to take when a pawn is promoted. Valid values are:
 
 When **Deterministic** is set to **true** this allows an alternate set of random moves to be played. All strings are valid values. All values result in a complete different set of random moves.
 
-### Installation
+### SyzygyPath
+
+Path to a syzygy tablespace. "/mnt/data/chess/syzygy/3-4-5", for example.
+
+## Installation
 
 The following dependencies are required:
 
@@ -66,6 +72,6 @@ Or use the GUI interface on your operating system to expand the ZIP file whereve
 
 If your chess GUI supports UCI then you only have to refer to the full path to **random-uci.py**, which in the above example is ***/opt/random-uci-0.9.0/bin/random-uci.py***. Some chess GUIs, such as Xboard and WinBoard, require Polyglot to translate from the Xboard protocol to UCI. In that case see the included **polyglot/random-uci.ini** for an example configuration file.
 
-### License
+## License
 
 GPL version 2.0 or later as per the included **LICENSE** file.
