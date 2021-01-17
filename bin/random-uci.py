@@ -250,7 +250,7 @@ for line in sys.stdin:
         # No thinking to stop
         pass
     elif command == "uci":
-        print("id name random-uci 0.9.0")
+        print("id name random-uci 0.9.1")
         print("id author Steven Elliott")
         print()
         print("option name Debug type check default false")

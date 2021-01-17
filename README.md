@@ -64,13 +64,13 @@ The following dependencies are required:
 pip install chess
 ```
 
-Once the dependencies have been satisfied the [ZIP file](https://github.com/selliott512/random-uci/archive/v0.9.0.zip) can be expanded to a directory of your choice. For example, if you downloaded the ZIP file to **~/Downloads**, but you wish to install it to **/opt** then:
+Once the dependencies have been satisfied the [ZIP file](https://github.com/selliott512/random-uci/archive/v0.9.1.zip) can be expanded to a directory of your choice. For example, if you downloaded the ZIP file to **~/Downloads**, but you wish to install it to **/opt** then:
 ```shell
-sudo unzip -d /opt ~/Downloads/random-uci-0.9.0.zip
+sudo unzip -d /opt ~/Downloads/random-uci-0.9.1.zip
 ```
 Or use the GUI interface on your operating system to expand the ZIP file wherever you want.
 
-If your chess GUI supports UCI then you only have to refer to the full path to **random-uci.py**, which in the above example is ***/opt/random-uci-0.9.0/bin/random-uci.py***. Some chess GUIs, such as Xboard and WinBoard, require Polyglot to translate from the Xboard protocol to UCI. In that case see the included **polyglot/random-uci.ini** for an example configuration file.
+If your chess GUI supports UCI then you only have to refer to the full path to **random-uci.py**, which in the above example is ***/opt/random-uci-0.9.1/bin/random-uci.py***. Some chess GUIs, such as Xboard and WinBoard, require Polyglot to translate from the Xboard protocol to UCI. In that case see the included **polyglot/random-uci.ini** for an example configuration file.
 
 ## License
 
