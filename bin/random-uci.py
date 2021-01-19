@@ -15,6 +15,7 @@ import hashlib
 import os
 import random
 import struct
+import time
 import sys
 
 # Options
@@ -28,6 +29,105 @@ opt_syzygypath    = None
 # Globals from "chess"
 board             = chess.Board()
 tablespace        = None
+
+# Globals having to with search
+max_depth         = 1
+max_score         = 1000000
+fen_to_raw_score  = {} # Transposition table
+min_ordering      = 1000
+
+# Functions
+
+# Standard alpha beta search. The value of score "score" relative to the root
+# node. Best nodes matching the best score may optionally be return by passing
+# true for "best_nodes".
+def alpha_beta(board, depth, alpha, beta, maximize, get_best):
+    # for the top level call make sure we're in the tablespace before doing
+    # anything else.
+    if depth == max_depth:
+        wdl = tablespace.get_wdl(board)
+        if wdl is None:
+            return None, []
+
+    # Extreme values to start max / min with.
+    score = -max_score if maximize else max_score
+
+    # The terminal node case.
+    leaf_node = board.is_stalemate() or board.is_checkmate()
+    if depth == 0 or leaf_node:
+        # How far we've searched so far from root. This is needed to
+        # prefer faster wins over slower ones.
+        searched_depth = max_depth - depth
+        fen = board.fen()
+        raw_score = fen_to_raw_score.get(fen)
+        if raw_score is None:
+            wdl = tablespace.get_wdl(board)
+            if wdl is not None:
+                dtz = 0 if leaf_node else tablespace.get_dtz(board)
+                if dtz is not None:
+                    # 1000 was chosen so that wdl will always take precedence over
+                    # dtz, but also so that the score produced is always much lower
+                    # than max_score.
+                    raw_score = 1000 * wdl - dtz
+                    fen_to_raw_score[fen] = raw_score
+        # A good score could not be found, so we haven't reached the tablespace.
+        if raw_score is None:
+            return None, []
+        # Positive values are good for the root player.
+        return (raw_score if maximize else -raw_score) - searched_depth, []
+
+    if get_best:
+        move_scores = []
+    moves = [move for move in board.legal_moves]
+    # Move the best moves to the start of the list. This seems to be harmful in
+    # some cases, so it's effectively disabled by setting min_ordering to a
+    # high value.
+    if depth > min_ordering:
+        estimated_score, best_moves = alpha_beta(board, depth - 1, alpha, beta, maximize, True)
+        if estimated_score is not None:
+            best_moves_set = set(best_moves)
+            best_count = 0
+            # Make sure the best moves are first.
+            for index, move in enumerate(moves):
+                if (index > best_count) and (move.uci() in best_moves):
+                    temp_move = moves[best_count]
+                    moves[best_count] = move
+                    moves[index] = temp_move
+                    best_count += 1
+    for move in moves:
+        board.push(move)
+        child_score, best_moves = alpha_beta(board, depth - 1, alpha, beta, not maximize, False)
+        board.pop()
+        if child_score is None:
+            # This seems odd since we should be in the tablespace. Maybe a warning?
+            continue
+        # Normally for alpha-beta pruning a score equal to one of the limits
+        # (score equal to alpha or beta) causes the searched_depth to break. However
+        # since the best moves (get_best) may be needed by a parent call of
+        # this method we need to know whether each node matches the best score,
+        # and should be included in the list of moves ultimately returned, or
+        # not.
+        if maximize:
+            score = max(score, child_score)
+            alpha = max(score, alpha)
+            if alpha > beta:
+                break # beta cutoff
+        else:
+            score = min(score, child_score)
+            beta  = min(score, beta)
+            if beta < alpha:
+                break # alpha cutoff
+        if get_best:
+            move_scores.append((move, child_score))
+    if get_best:
+        moves = []
+        for move_score in move_scores:
+            mv, sc = move_score
+            if sc == score:
+                moves.append(mv.uci())
+        return score, moves
+    else:
+        return score, []
 
 # Keep reading lines/commands from standard input until told to quit.
 for line in sys.stdin:
@@ -83,55 +183,17 @@ for line in sys.stdin:
                     proposed_move = chr(201 - ord(lm[0])) + chr(105 - ord(lm[1])) + \
                                     chr(201 - ord(lm[2])) + chr(105 - ord(lm[3])) + lm[4:]
             elif opt_filter == "syzygy":
-                # If all moves are in the tablespace then find the best move by
-                # first optimizing for WDL, and then DTZ.
-                # TODO: This is quite suboptimal when the winning side has more
-                # pieces than required to win since it may sacrifice one of those
-                # pieces, producing a low DTZ, but a much longer path to a win.
-                # It should still win, however.
+                # If we were able to pen the table space then attempt an alpha
+                # beta search to find the best move.
                 if tablespace is not None:
-                    filtered_moves = []
-                    best_wdl    =  1000000
-                    best_score  = -1000000
-                    wdl = tablespace.get_wdl(board)
+                    before = time.time()
+                    alpha_beta_ret = alpha_beta(board, max_depth, -max_score, max_score, True, True)
+                    score, filtered_moves = alpha_beta_ret
                     if opt_debug:
-                        print("info string syzygy: top level wdl=" + str(wdl))
-                    if wdl is not None:
-                        candidates = []
-                        for move in moves:
-                            board.push_uci(move)
-                            wdl = tablespace.get_wdl(board)
-                            if opt_debug:
-                                print("info string syzygy: move=" + move
-                                    + " wdl=" + str(wdl))
-                            if (wdl is not None) and (wdl <= best_wdl):
-                                # best_dtz is per the best_wdl being
-                                # considered, so reset it if best_wdl changes.
-                                if best_wdl != wdl:
-                                    best_dtz = -1000000
-                                best_wdl = wdl
-                                dtz = tablespace.get_dtz(board)
-                                if opt_debug:
-                                    print("info string syzygy: move=" + move
-                                        + " wdl=" + str(wdl) + " dtz=" + str(dtz)
-                                        + " best_wdl=" + str(best_wdl))
-                                if (dtz is not None) and (dtz >= best_dtz):
-                                    best_dtz = dtz
-                                    score = dtz - 1000 * wdl
-                                    if score > best_score:
-                                        best_score = score
-                                    candidates.append((score, move))
-                                    if opt_debug:
-                                        print("info string syzygy: move=" + move
-                                            + " wdl=" + str(wdl) + " dtz=" + str(dtz)
-                                            + " best_wdl=" + str(best_wdl) + " best_dtz="
-                                            + str(best_dtz) + " best_score=" + str(best_score)
-                                            + " appended " + str((score, move)))
-                            board.pop()
-                        for candidate in candidates:
-                            score, move = candidate
-                            if score >= best_score:
-                                filtered_moves.append(move)
+                        print("info string syzygy score=" + str(score) + " pid=" + str(os.getpid()))
+                        print("info string syzygy search took " + str(int(
+                            1000*(time.time() - before))) + " millis for " +
+                            board.fen())
             else:
                 # Assume the filter is a piece. Only moves that move the
                 # specified piece will remain.
@@ -264,6 +326,9 @@ for line in sys.stdin:
     elif command == "ucinewgame":
         # Reset to the initial board.
         board.reset()
+        # TODO: Come up with more transposition strategy where the oldest
+        # entries are removed. For now hopefully games aren't too long.
+        fen_to_raw_score.clear()
     else:
         print("Unknown command: " + line)
 
